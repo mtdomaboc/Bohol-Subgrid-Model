@@ -7,7 +7,7 @@ from pandapower.pypower.makeYbus import makeYbus
 import pandas as pd
 import numpy as np
 
-# test lang to see if working
+#Alvaro, Domaboc, Orengo
 print("=== PANDAPOWER NEWTON–RAPHSON POWER FLOW TEST ===")
 
 # ------------------------------
