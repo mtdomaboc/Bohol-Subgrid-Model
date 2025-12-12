@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 
 # Alvaro, Domaboc, Orengo
-# Hello Sir Cabaoig
 print("=== PANDAPOWER NEWTON–RAPHSON POWER FLOW TEST ===")
 
 # ------------------------------
@@ -440,6 +439,92 @@ print(jacobian_df)
 # print(f"PV Buses: {len(pv_buses)}, PQ Buses: {len(pq_buses)}")
 
 print("\n=== POWER FLOW METHOD: Newton–Raphson ===")
+
+# Add this section BEFORE running OPF (around line 400)
+# ------------------------------
+#    Setup OPF with generator costs and limits
+# ------------------------------
+print("\n=== SETTING UP OPF ===")
+
+# Set generator limits (min and max power output)
+# Use current p_mw as reference, allow some flexibility
+for idx in net.gen.index:
+    current_p = net.gen.loc[idx, 'p_mw']
+    # Set min to 0 and max to 150% of current or at least 10 MW
+    net.gen.loc[idx, 'min_p_mw'] = max(0.5, 0.1 * current_p)  # 10% of nominal or at least 0.5 MW
+    net.gen.loc[idx, 'max_p_mw'] = max(current_p * 1.5, 10.0)
+    net.gen.loc[idx, 'controllable'] = True  # Make generators controllable by OPF
+
+# Set reactive power limits for generators
+for idx in net.gen.index:
+    net.gen.loc[idx, 'min_q_mvar'] = -50.0
+    net.gen.loc[idx, 'max_q_mvar'] = 50.0
+
+# Add polynomial costs for all generators
+# Format: create_poly_cost(net, element_index, element_type, cost_array)
+# cost_array = [c2, c1, c0] for cost = c2*P^2 + c1*P + c0
+
+for idx in net.gen.index:
+    # Sample cost: 100 PHP/MWh (linear cost)
+    # Using [0, 100, 0] means cost = 100*P
+    pp.create_poly_cost(net, idx, 'gen', cp1_eur_per_mw=50 + idx*10, cp0_eur=0)
+
+# Add costs for external grids (typically lower to represent grid supply)
+for idx in net.ext_grid.index:
+    pp.create_poly_cost(net, idx, 'ext_grid', cp1_eur_per_mw=50, cp0_eur=0)
+
+print("Generator costs added successfully.")
+
+# ------------------------------
+#    Run OPF
+# ------------------------------
+print("\n=== RUNNING OPF (AC Optimal Power Flow) ===")
+
+try:
+    pp.runopp(net, ac=True, verbose=True, delta=1e-10)
+    print("\nOPF converged successfully!")
+    
+    # Extract LMP data
+    print("\n=== LOCATIONAL MARGINAL PRICES (LMP) ===")
+    print("\nLMP for each bus (PHP/MWh):")
+    print(net.res_bus[['vm_pu', 'va_degree', 'p_mw', 'q_mvar', 'lam_p', 'lam_q']])
+    
+    # Alternative: Access lambda_p directly (older pandapower versions)
+    if 'lambda_p' in net.res_bus.columns:
+        print("\n=== LMP Summary (using lambda_p) ===")
+        lmp_summary = net.res_bus[['vm_pu', 'lambda_p']].copy()
+        lmp_summary.columns = ['Voltage (pu)', 'LMP (PHP/MWh)']
+        print(lmp_summary)
+    
+    # Create a clean LMP dataframe
+    print("\n=== CLEAN LMP RESULTS ===")
+    lmp_results = pd.DataFrame({
+        'Bus': net.bus['name'],
+        'Voltage_kV': net.bus['vn_kv'],
+        'LMP_PHP_per_MWh': net.res_bus['lam_p'].values
+    })
+    print(lmp_results)
+    
+    # Show generator dispatch results
+    print("\n=== GENERATOR DISPATCH (OPF) ===")
+    print(net.res_gen[['p_mw', 'q_mvar', 'va_degree', 'vm_pu']])
+    
+    print("\n=== EXTERNAL GRID RESULTS ===")
+    print(net.res_ext_grid[['p_mw', 'q_mvar']])
+    
+except Exception as e:
+    print(f"\nOPF failed to converge or error occurred: {e}")
+    print("Falling back to regular power flow results...")
+    # The regular power flow results are already available from earlier
+
+# REMOVE OR COMMENT OUT THE OLD OPF SECTION (lines 415-423):
+# This section should be DELETED from your original code:
+# pp.runopp(net, ac=True, verbose=False) 
+# lmp_results = net.res_bus.lambda_p 
+# print(lmp_results)
+
+# The complete OPF setup and execution is now handled above.
+# Do NOT call runopp() again after the detailed section above.
 
 # ------------------------------
 #    Create Detailed Single-Line Diagram
