@@ -439,15 +439,12 @@ print(jacobian_df)
 # print(f"PV Buses: {len(pv_buses)}, PQ Buses: {len(pq_buses)}")
 
 print("\n=== POWER FLOW METHOD: Newton–Raphson ===")
-
-# Add this section BEFORE running OPF (around line 400)
 # ------------------------------
 #    Setup OPF with generator costs and limits
 # ------------------------------
 print("\n=== SETTING UP OPF ===")
 
-# Set generator limits (min and max power output)
-# Use current p_mw as reference, allow some flexibility
+# To test functionality only
 for idx in net.gen.index:
     current_p = net.gen.loc[idx, 'p_mw']
     # Set min to 0 and max to 150% of current or at least 10 MW
@@ -489,7 +486,6 @@ try:
     print("\nLMP for each bus (PHP/MWh):")
     print(net.res_bus[['vm_pu', 'va_degree', 'p_mw', 'q_mvar', 'lam_p', 'lam_q']])
     
-    # Alternative: Access lambda_p directly (older pandapower versions)
     if 'lambda_p' in net.res_bus.columns:
         print("\n=== LMP Summary (using lambda_p) ===")
         lmp_summary = net.res_bus[['vm_pu', 'lambda_p']].copy()
@@ -516,15 +512,6 @@ except Exception as e:
     print(f"\nOPF failed to converge or error occurred: {e}")
     print("Falling back to regular power flow results...")
     # The regular power flow results are already available from earlier
-
-# REMOVE OR COMMENT OUT THE OLD OPF SECTION (lines 415-423):
-# This section should be DELETED from your original code:
-# pp.runopp(net, ac=True, verbose=False) 
-# lmp_results = net.res_bus.lambda_p 
-# print(lmp_results)
-
-# The complete OPF setup and execution is now handled above.
-# Do NOT call runopp() again after the detailed section above.
 
 # ------------------------------
 #    Create Detailed Single-Line Diagram
