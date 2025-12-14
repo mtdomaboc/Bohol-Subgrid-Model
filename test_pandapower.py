@@ -439,38 +439,100 @@ print(jacobian_df)
 # print(f"PV Buses: {len(pv_buses)}, PQ Buses: {len(pq_buses)}")
 
 print("\n=== POWER FLOW METHOD: Newton–Raphson ===")
+
 # ------------------------------
 #    Setup OPF with generator costs and limits
 # ------------------------------
 print("\n=== SETTING UP OPF ===")
 
-# To test functionality only
-for idx in net.gen.index:
-    current_p = net.gen.loc[idx, 'p_mw']
-    # Set min to 0 and max to 150% of current or at least 10 MW
-    net.gen.loc[idx, 'min_p_mw'] = max(0.5, 0.1 * current_p)  # 10% of nominal or at least 0.5 MW
-    net.gen.loc[idx, 'max_p_mw'] = max(current_p * 1.5, 10.0)
-    net.gen.loc[idx, 'controllable'] = True  # Make generators controllable by OPF
+# Clear any existing costs first (in case code is re-run)
+net.poly_cost.drop(net.poly_cost.index, inplace=True)
 
-# Set reactive power limits for generators
+# Set realistic generator limits based on actual nameplate capacities
+# Format: 'Generator_Name': (min_MW, max_MW)
+generator_capacities = {
+    'DAGSOL_G01': (0, 12),       # Solar generator
+    'UBAY_BAT': (0, 50),         # Battery storage
+    'TPLPB4_U01': (0, 1),        # Small biomass units
+    'TPLPB4_U02': (0, 1),
+    'TPLPB4_U03': (0, 1),
+    'TPLPB4_U04': (0, 1),
+    'BIDPP_G01': (0, 35),        # Main diesel generator
+    'JANOPO_G01': (0, 1),        # Small hydro
+    'BDPP_U01': (0, 8.5),        # Diesel units
+    'BDPP_U02': (0, 8.5),
+    'BDPP_U03': (0, 8.5),
+    'BDPP_U04': (0, 8.5),
+    'LOBOC_G01': (0, 1.2),       # Small hydro units
+    'LOBOC_G03': (0, 1.2),
+    'SEVILL_G01': (0, 3.5)       # Hydro
+}
+
+# Apply generator limits
+for idx in net.gen.index:
+    gen_name = net.gen.loc[idx, 'name']
+    if gen_name in generator_capacities:
+        min_p, max_p = generator_capacities[gen_name]
+        net.gen.loc[idx, 'min_p_mw'] = min_p
+        net.gen.loc[idx, 'max_p_mw'] = max_p
+    else:
+        # Default for any unnamed generators
+        net.gen.loc[idx, 'min_p_mw'] = 0.0
+        net.gen.loc[idx, 'max_p_mw'] = 50.0
+    
+    net.gen.loc[idx, 'controllable'] = True
+
+# Set reactive power limits
 for idx in net.gen.index:
     net.gen.loc[idx, 'min_q_mvar'] = -50.0
     net.gen.loc[idx, 'max_q_mvar'] = 50.0
 
-# Add polynomial costs for all generators
-# Format: create_poly_cost(net, element_index, element_type, cost_array)
-# cost_array = [c2, c1, c0] for cost = c2*P^2 + c1*P + c0
+# Set generator costs by type using ACTUAL GENERATION OFFERS
+# Data from 11/28/2025 23:05 generation offers
+# NOTE: Original prices appear to be in PHP/kWh, converting to PHP/MWh
+generator_costs = {
+    'BDPP_U01': 4000,       # SIPC - 4 PHP/kWh = 4,000 PHP/MWh
+    'BDPP_U02': 4000,       # SIPC - 4 PHP/kWh = 4,000 PHP/MWh
+    'BDPP_U03': 4200,       # SIPC - 4.2 PHP/kWh = 4,200 PHP/MWh
+    'BDPP_U04': 4000,       # SIPC - 4 PHP/kWh = 4,000 PHP/MWh
+    'BIDPP_G01': 53100,     # MPC - 53.1 PHP/kWh = 53,100 PHP/MWh
+    'TPLPB4_U01': 7000,     # SPCPOWER - 7 PHP/kWh = 7,000 PHP/MWh
+    'TPLPB4_U02': 7000,     # SPCPOWER - 7 PHP/kWh = 7,000 PHP/MWh
+    'TPLPB4_U03': 7000,     # SPCPOWER - 7 PHP/kWh = 7,000 PHP/MWh
+    'TPLPB4_U04': 8000,     # SPCPOWER - 8 PHP/kWh = 8,000 PHP/MWh
+    'UBAY_BAT': 17800,      # UPSI - 17.8 PHP/kWh = 17,800 PHP/MWh
+    # Generators not in offer data - use default costs
+    'DAGSOL_G01': 0,        # Solar - zero marginal cost
+    'JANOPO_G01': 5000,     # Small hydro - assumed 5 PHP/kWh
+    'LOBOC_G01': 5000,      # Small hydro - assumed 5 PHP/kWh
+    'LOBOC_G03': 5000,      # Small hydro - assumed 5 PHP/kWh
+    'SEVILL_G01': 5000,     # Hydro - assumed 5 PHP/kWh
+}
 
+# Apply generator costs
 for idx in net.gen.index:
-    # Sample cost: 100 PHP/MWh (linear cost)
-    # Using [0, 100, 0] means cost = 100*P
-    pp.create_poly_cost(net, idx, 'gen', cp1_eur_per_mw=50 + idx*10, cp0_eur=0)
+    gen_name = net.gen.loc[idx, 'name']
+    cost = generator_costs.get(gen_name, 100)  # Default cost if not specified
+    pp.create_poly_cost(net, idx, 'gen', cp1_eur_per_mw=cost, cp0_eur=0)
 
-# Add costs for external grids (typically lower to represent grid supply)
+# Set external grid costs to reflect realistic market prices
+# Based on typical Visayas grid LMP values (3000-3500 PHP/MWh range)
 for idx in net.ext_grid.index:
-    pp.create_poly_cost(net, idx, 'ext_grid', cp1_eur_per_mw=50, cp0_eur=0)
+    # Set external grid cost to 3200 PHP/MWh (realistic market clearing price)
+    # This represents the cost of importing power from the main grid
+    pp.create_poly_cost(net, idx, 'ext_grid', cp1_eur_per_mw=3200, cp0_eur=0)
+    
+    # Set transmission limits (realistic interconnection capacity)
+    net.ext_grid.loc[idx, 'max_p_mw'] = 80.0    # Max import per interconnection
+    net.ext_grid.loc[idx, 'min_p_mw'] = -150.0  # Allow exports
 
-print("Generator costs added successfully.")
+print("\nExternal grid configuration: 3200 PHP/MWh, max import 80 MW per grid")
+
+print("Generator costs and limits configured:")
+print("\nGenerator Limits:")
+for idx in net.gen.index:
+    print(f"{net.gen.loc[idx, 'name']}: "
+          f"{net.gen.loc[idx, 'min_p_mw']:.1f} - {net.gen.loc[idx, 'max_p_mw']:.1f} MW")
 
 # ------------------------------
 #    Run OPF
@@ -486,32 +548,88 @@ try:
     print("\nLMP for each bus (PHP/MWh):")
     print(net.res_bus[['vm_pu', 'va_degree', 'p_mw', 'q_mvar', 'lam_p', 'lam_q']])
     
-    if 'lambda_p' in net.res_bus.columns:
-        print("\n=== LMP Summary (using lambda_p) ===")
-        lmp_summary = net.res_bus[['vm_pu', 'lambda_p']].copy()
-        lmp_summary.columns = ['Voltage (pu)', 'LMP (PHP/MWh)']
-        print(lmp_summary)
+    # NEW: Show LMP for each LOAD specifically
+    print("\n=== LMP BY LOAD (PHP/MWh) ===")
+    load_lmp_data = []
+    for idx in net.load.index:
+        load_name = net.load.loc[idx, 'name']
+        load_bus = net.load.loc[idx, 'bus']
+        load_p_mw = net.load.loc[idx, 'p_mw']
+        bus_name = net.bus.loc[load_bus, 'name']
+        bus_voltage_kv = net.bus.loc[load_bus, 'vn_kv']
+        lmp = net.res_bus.loc[load_bus, 'lam_p']
+        
+        load_lmp_data.append({
+            'Load_Name': load_name,
+            'Bus': bus_name,
+            'Bus_kV': bus_voltage_kv,
+            'Load_MW': load_p_mw,
+            'LMP_PHP_per_MWh': lmp
+        })
     
-    # Create a clean LMP dataframe
-    print("\n=== CLEAN LMP RESULTS ===")
-    lmp_results = pd.DataFrame({
-        'Bus': net.bus['name'],
-        'Voltage_kV': net.bus['vn_kv'],
-        'LMP_PHP_per_MWh': net.res_bus['lam_p'].values
-    })
-    print(lmp_results)
+    load_lmp_df = pd.DataFrame(load_lmp_data)
+    print(load_lmp_df.to_string(index=False))
     
-    # Show generator dispatch results
+    # Calculate total cost for each load
+    print("\n=== LOAD ENERGY COST ===")
+    load_lmp_df['Total_Cost_PHP_per_hour'] = load_lmp_df['Load_MW'] * load_lmp_df['LMP_PHP_per_MWh']
+    print(load_lmp_df[['Load_Name', 'Load_MW', 'LMP_PHP_per_MWh', 'Total_Cost_PHP_per_hour']].to_string(index=False))
+    
+    total_load_cost = load_lmp_df['Total_Cost_PHP_per_hour'].sum()
+    print(f"\nTotal System Load Cost: {total_load_cost:,.2f} PHP/hour")
+    
+    # Show generator dispatch results with costs
     print("\n=== GENERATOR DISPATCH (OPF) ===")
-    print(net.res_gen[['p_mw', 'q_mvar', 'va_degree', 'vm_pu']])
+    gen_results = net.res_gen[['p_mw', 'q_mvar']].copy()
+    gen_results['name'] = net.gen['name'].values
+    gen_results['max_p_mw'] = net.gen['max_p_mw'].values
+    gen_results['utilization_%'] = (gen_results['p_mw'] / gen_results['max_p_mw'] * 100).round(2)
+    
+    # Get costs from poly_cost
+    gen_results['cost_php_mwh'] = 0.0
+    for idx in net.gen.index:
+        cost_idx = net.poly_cost[(net.poly_cost.element == idx) & 
+                                  (net.poly_cost.et == 'gen')].index
+        if len(cost_idx) > 0:
+            gen_results.loc[idx, 'cost_php_mwh'] = net.poly_cost.loc[cost_idx[0], 'cp1_eur_per_mw']
+    
+    print(gen_results[['name', 'p_mw', 'max_p_mw', 'utilization_%', 'cost_php_mwh', 'q_mvar']])
     
     print("\n=== EXTERNAL GRID RESULTS ===")
-    print(net.res_ext_grid[['p_mw', 'q_mvar']])
+    ext_grid_results = net.res_ext_grid[['p_mw', 'q_mvar']].copy()
+    ext_grid_results['name'] = net.ext_grid['name'].values
+    print(ext_grid_results)
+    
+    # Calculate total generation and cost
+    total_gen = net.res_gen['p_mw'].sum()
+    total_ext_grid = net.res_ext_grid['p_mw'].sum()
+    total_load = net.res_load['p_mw'].sum()
+    
+    print(f"\n=== POWER BALANCE ===")
+    print(f"Total Generator Output: {total_gen:.2f} MW")
+    print(f"Total External Grid: {total_ext_grid:.2f} MW")
+    print(f"Total Load: {total_load:.2f} MW")
+    print(f"Total Supply: {total_gen + total_ext_grid:.2f} MW")
+    
+    # Calculate total cost
+    total_cost = 0
+    for idx in net.gen.index:
+        p_mw = net.res_gen.loc[idx, 'p_mw']
+        cost_idx = net.poly_cost[(net.poly_cost.element == idx) & 
+                                  (net.poly_cost.et == 'gen')].index
+        if len(cost_idx) > 0:
+            cost = net.poly_cost.loc[cost_idx[0], 'cp1_eur_per_mw']
+            total_cost += p_mw * cost
+    
+    print(f"\n=== ECONOMIC DISPATCH ===")
+    print(f"Total Generation Cost: {total_cost:.2f} PHP/hour")
+    print(f"Average Cost: {total_cost/total_load if total_load > 0 else 0:.2f} PHP/MWh")
     
 except Exception as e:
     print(f"\nOPF failed to converge or error occurred: {e}")
     print("Falling back to regular power flow results...")
-    # The regular power flow results are already available from earlier
+    import traceback
+    traceback.print_exc()
 
 # ------------------------------
 #    Create Detailed Single-Line Diagram
